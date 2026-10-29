@@ -110,7 +110,7 @@ public final class MainScreenObservationTest {
               0,
               List.of(
                   app(),
-                  window(8, 9, kind, false, false, new ScreenWindowRegion.Bounds(2, 2, 4, 4))));
+                  window(8, 9, kind, false, false, new ScreenWindowRegion.Bounds(2, 2, 5, 5))));
       assertTrue(region.obscured());
       assertFalse(region.containsTrajectory(1, 1, 4, 6, 1));
       for (var unknownBounds :

@@ -50,58 +50,77 @@ public final class MainScreenWindowPolicy {
     return new Selection(selected, "READABLE");
   }
 
-  /** Clip only non-interactive system chrome / IME covering a complete edge. Interior covers refuse coordinates. */
+  /** 裁掉系统边缘窗占用的区域；内部真实遮挡仍拒绝坐标。 */
   public static ScreenWindowRegion region(int selected, List<Window> windows) {
     Window target = windows.get(selected);
     var original = target.bounds;
     if (original == null || !original.valid()) return null;
     var content = original;
-    boolean obscured = false;
+    // HyperOS 的占位系统窗可能只有 1×1；不能因此封锁整张截图。
+    // 边缘手势条也可能只覆盖边缘的一部分，保守裁掉整条对应边带。
     for (Window other : windows) {
       if (other.display != 0 || other.id == target.id || other.layer <= target.layer) continue;
       var cover = other.bounds;
-      if (cover == null || !cover.valid()) {
-        obscured = true;
-        continue;
-      }
+      if (cover == null || !cover.valid() || tinySystemPlaceholder(other)) continue;
       if (!content.intersects(cover)) continue;
       boolean edgeChrome =
           other.kind == Kind.INPUT_METHOD
               || other.kind == Kind.SYSTEM && !other.focused && !other.active;
-      if (edgeChrome
-          && cover.left() <= content.left()
-          && cover.right() >= content.right()
-          && cover.top() <= content.top()
-          && cover.bottom() < content.bottom())
-        content =
-            new ScreenWindowRegion.Bounds(
-                content.left(), cover.bottom(), content.right(), content.bottom());
-      else if (edgeChrome
-          && cover.left() <= content.left()
-          && cover.right() >= content.right()
-          && cover.bottom() >= content.bottom()
-          && cover.top() > content.top())
-        content =
-            new ScreenWindowRegion.Bounds(
-                content.left(), content.top(), content.right(), cover.top());
-      else if (edgeChrome
-          && cover.top() <= content.top()
-          && cover.bottom() >= content.bottom()
-          && cover.left() <= content.left()
-          && cover.right() < content.right())
-        content =
-            new ScreenWindowRegion.Bounds(
-                cover.right(), content.top(), content.right(), content.bottom());
-      else if (edgeChrome
-          && cover.top() <= content.top()
-          && cover.bottom() >= content.bottom()
-          && cover.right() >= content.right()
-          && cover.left() > content.left())
-        content =
-            new ScreenWindowRegion.Bounds(
-                content.left(), content.top(), cover.left(), content.bottom());
-      else obscured = true;
+      if (edgeChrome) content = clipEdge(content, cover);
+    }
+    // 所有裁剪完成后再查遮挡，避免窗口枚举顺序使已被裁掉的窗口仍封锁坐标。
+    boolean obscured = false;
+    for (Window other : windows) {
+      if (other.display != 0 || other.id == target.id || other.layer <= target.layer) continue;
+      if (tinySystemPlaceholder(other)) continue;
+      var cover = other.bounds;
+      if (cover == null || !cover.valid() || content.intersects(cover)) obscured = true;
     }
     return new ScreenWindowRegion(original, content, obscured);
+  }
+
+  private static boolean tinySystemPlaceholder(Window window) {
+    return window.kind == Kind.SYSTEM
+        && !window.focused
+        && !window.active
+        && window.bounds != null
+        && window.bounds.valid()
+        && area(window.bounds) <= 4;
+  }
+
+  private static long area(ScreenWindowRegion.Bounds bounds) {
+    // int 坐标跨度可能超过 2^31；饱和计算避免溢出被当成微小窗口。
+    long width = (long) bounds.right() - bounds.left();
+    long height = (long) bounds.bottom() - bounds.top();
+    return width > Long.MAX_VALUE / height ? Long.MAX_VALUE : width * height;
+  }
+
+  private static ScreenWindowRegion.Bounds clipEdge(
+      ScreenWindowRegion.Bounds content, ScreenWindowRegion.Bounds cover) {
+    ScreenWindowRegion.Bounds best = null;
+    var candidates =
+        new ScreenWindowRegion.Bounds[] {
+          cover.top() <= content.top()
+              ? new ScreenWindowRegion.Bounds(
+                  content.left(), cover.bottom(), content.right(), content.bottom())
+              : null,
+          cover.bottom() >= content.bottom()
+              ? new ScreenWindowRegion.Bounds(
+                  content.left(), content.top(), content.right(), cover.top())
+              : null,
+          cover.left() <= content.left()
+              ? new ScreenWindowRegion.Bounds(
+                  cover.right(), content.top(), content.right(), content.bottom())
+              : null,
+          cover.right() >= content.right()
+              ? new ScreenWindowRegion.Bounds(
+                  content.left(), content.top(), cover.left(), content.bottom())
+              : null
+        };
+    for (var candidate : candidates) {
+      if (candidate != null && candidate.valid() && (best == null || area(candidate) > area(best)))
+        best = candidate;
+    }
+    return best == null ? content : best;
   }
 }

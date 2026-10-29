@@ -890,6 +890,7 @@
     "app/src/test/java/com/deepseekharness/app/util/LanTokenStateTest.java",
     "app/src/test/java/com/deepseekharness/app/util/LogCompactorTest.java",
     "app/src/test/java/com/deepseekharness/app/util/MainScreenObservationTest.java",
+    "app/src/test/java/com/deepseekharness/app/util/MainScreenWindowPolicyTest.java",
     "app/src/test/java/com/deepseekharness/app/util/MaintenanceErrorTextTest.java",
     "app/src/test/java/com/deepseekharness/app/util/MaintenanceGateIntegrationTest.java",
     "app/src/test/java/com/deepseekharness/app/util/MaintenanceGateTest.java",
