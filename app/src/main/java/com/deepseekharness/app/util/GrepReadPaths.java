@@ -6,6 +6,8 @@ import java.util.Set;
 
 /** 按受支持的 grep 参数合同收集真正读取的文件，不把模式和过滤条件当作文件。 */
 public final class GrepReadPaths {
+  public record Read(List<String> paths, boolean recursive) {}
+
   private static final String FLAGS = "ZzEFHIabhinorRsvwcLlqx";
   private static final Set<String> LONG_FLAGS =
       Set.of(
@@ -25,6 +27,10 @@ public final class GrepReadPaths {
   private GrepReadPaths() {}
 
   public static List<String> collect(List<String> argv) {
+    return inspect(argv).paths();
+  }
+
+  public static Read inspect(List<String> argv) {
     if (argv == null || argv.isEmpty() || !"grep".equals(argv.get(0))) throw invalid();
     for (String arg : argv) if (arg == null || arg.indexOf('\0') >= 0) throw invalid();
     List<String> paths = new ArrayList<>(), positional = new ArrayList<>();
@@ -66,7 +72,7 @@ public final class GrepReadPaths {
     for (int i = firstFile; i < positional.size(); i++)
       if (!positional.get(i).equals("-")) paths.add(positional.get(i));
     if (recursive && positional.size() <= firstFile) paths.add(".");
-    return List.copyOf(paths);
+    return new Read(List.copyOf(paths), recursive);
   }
 
   private static IllegalArgumentException invalid() {

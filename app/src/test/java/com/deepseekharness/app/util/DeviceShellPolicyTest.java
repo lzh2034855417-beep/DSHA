@@ -276,7 +276,6 @@ public class DeviceShellPolicyTest {
           "du",
           "du data",
           "du /data",
-          "grep -R message /data/data",
           "ls -R",
           "ls -R data",
           "ls -R /data/user",
@@ -302,6 +301,8 @@ public class DeviceShellPolicyTest {
     assertFalse(DeviceShellPolicy.smsProviderDescendant("/data/user/0/com.example.app"));
     assertFalse(DeviceShellPolicy.smsProviderDescendant("/data/data/com.example.app"));
     assertFalse(DeviceShellPolicy.rootReadMayDescend(DeviceShellPolicy.inspect("ls /")));
+    assertEquals(
+        DeviceShellPolicy.Kind.DENY, DeviceShellPolicy.inspect("grep -R message /data/data").kind);
   }
 
   @Test
@@ -437,12 +438,10 @@ public class DeviceShellPolicyTest {
   @Test
   public void recursiveGrepWithoutInputFilesChecksWorkingDirectory() {
     assertEquals(
-        java.util.List.of("."),
-        DeviceShellPolicy.rootReadPaths(DeviceShellPolicy.inspect("grep -R -e x")));
+        java.util.List.of("."), GrepReadPaths.collect(DeviceShellPolicy.split("grep -R -e x")));
     assertEquals(
         java.util.List.of("/data/local/tmp/patterns", "."),
-        DeviceShellPolicy.rootReadPaths(
-            DeviceShellPolicy.inspect("grep -Rf/data/local/tmp/patterns")));
+        GrepReadPaths.collect(DeviceShellPolicy.split("grep -Rf/data/local/tmp/patterns")));
     assertEquals(
         java.util.List.of(),
         DeviceShellPolicy.rootReadPaths(DeviceShellPolicy.inspect("grep -e -R")));
@@ -475,5 +474,63 @@ public class DeviceShellPolicyTest {
       assertEquals(
           DeviceShellPolicy.Kind.DENY,
           DeviceShellPolicy.inspectManagedVirtualScreen(invalid, apk, "com.dsh.client").kind);
+  }
+
+  @Test
+  public void unverifiedLinkFollowingReadFormsAreDenied() {
+    for (String command :
+        new String[] {
+          "grep -r x /data/local/tmp/tree",
+          "grep -nR x /data/local/tmp/tree",
+          "grep -Rf/data/local/tmp/patterns /data/local/tmp/tree",
+          "ls -RL /data/local/tmp/tree",
+          "ls -lL /data/local/tmp/tree",
+          "du -aL /data/local/tmp/tree",
+          "du --dereference /data/local/tmp/tree",
+          "ls --dereference /data/local/tmp/tree"
+        })
+      assertEquals(command, DeviceShellPolicy.Kind.DENY, DeviceShellPolicy.inspect(command).kind);
+  }
+
+  @Test
+  public void metadataEnumerationAndLiteralFlagTextRemainUsable() {
+    for (String command :
+        new String[] {
+          "grep -e -R /data/local/tmp/input",
+          "grep -f /data/local/tmp/-r-patterns /data/local/tmp/input",
+          "grep -e x -- -r-literal",
+          "ls -R /data/local/tmp/tree",
+          "ls -r /data/local/tmp/tree",
+          "ls -- -L",
+          "du -s /data/local/tmp/tree",
+          "du -d 0 /data/local/tmp/tree",
+          "find /data/local/tmp/tree -maxdepth 2 -type f"
+        })
+      assertEquals(command, DeviceShellPolicy.Kind.READ, DeviceShellPolicy.inspect(command).kind);
+    assertFalse(
+        DeviceShellPolicy.rootReadMayDescend(
+            DeviceShellPolicy.inspect("ls -r /data/local/tmp/tree")));
+    assertFalse(
+        DeviceShellPolicy.rootReadMayDescend(
+            DeviceShellPolicy.inspect("grep -e -R /data/local/tmp/input")));
+  }
+
+  @Test
+  public void directoryOptionValuesAreNotReadPathsAndDefaultDirectoryIsChecked() {
+    assertEquals(
+        java.util.List.of("/data/local/tmp/tree"),
+        DeviceShellPolicy.rootReadPaths(
+            DeviceShellPolicy.inspect("ls -w 80 --sort=size /data/local/tmp/tree")));
+    assertEquals(
+        java.util.List.of("/data/local/tmp/tree"),
+        DeviceShellPolicy.rootReadPaths(DeviceShellPolicy.inspect("du -d 0 /data/local/tmp/tree")));
+    assertEquals(
+        java.util.List.of("."), DeviceShellPolicy.rootReadPaths(DeviceShellPolicy.inspect("ls")));
+    assertEquals(
+        java.util.List.of("-L"),
+        DeviceShellPolicy.rootReadPaths(DeviceShellPolicy.inspect("ls -- -L")));
+    for (String command :
+        new String[] {"ls -w", "ls --sort", "du -d", "du -d0L /tree", "ls --unknown /tree"})
+      assertEquals(command, DeviceShellPolicy.Kind.DENY, DeviceShellPolicy.inspect(command).kind);
   }
 }

@@ -115,12 +115,12 @@ public final class DeviceShellPolicy {
       return deny(
           com.deepseekharness.app.util.UiText.format("禁止设备分区、SELinux、系统属性、挂载或刷机操作：%s", name));
     if (READ.contains(name)) {
-      if (name.equals("grep")) {
-        try {
-          GrepReadPaths.collect(args);
-        } catch (IllegalArgumentException invalid) {
-          return deny(invalid.getMessage());
-        }
+      try {
+        if (name.equals("grep") && GrepReadPaths.inspect(args).recursive())
+          return deny("RECURSIVE_GREP_UNVERIFIED");
+        if (name.equals("ls") || name.equals("du")) DirectoryReadPaths.inspect(args);
+      } catch (IllegalArgumentException invalid) {
+        return deny(invalid.getMessage());
       }
       return plan(Kind.READ, args, Collections.emptyList());
     }
@@ -342,6 +342,8 @@ public final class DeviceShellPolicy {
     if (plan == null) return Collections.emptyList();
     if (plan.kind == Kind.READ && plan.command().equals("grep"))
       return GrepReadPaths.collect(plan.argv);
+    if (plan.kind == Kind.READ && (plan.command().equals("ls") || plan.command().equals("du")))
+      return DirectoryReadPaths.inspect(plan.argv).paths();
     List<String> paths = new ArrayList<>();
     if (plan.kind == Kind.FILE && plan.command().equals("cp")) {
       for (int i = 0; i + 1 < plan.operands.size(); i++) paths.add(plan.operands.get(i));
@@ -364,8 +366,6 @@ public final class DeviceShellPolicy {
       }
       if (arg.startsWith("/") || arg.contains("/") || !arg.startsWith("-")) paths.add(arg);
     }
-    if (paths.isEmpty() && plan.command().equals("du")) paths.add(".");
-    if (paths.isEmpty() && plan.command().equals("ls") && rootReadMayDescend(plan)) paths.add(".");
     return Collections.unmodifiableList(paths);
   }
 
@@ -381,15 +381,10 @@ public final class DeviceShellPolicy {
       return false;
     }
     if (plan.kind != Kind.READ) return false;
-    if (command.equals("find") || command.equals("du")) return true;
-    if (command.equals("ls") || command.equals("grep")) {
-      for (String arg : plan.argv) {
-        if (arg.equals("-R") || arg.equals("-r") || arg.equals("--recursive")) return true;
-        if (arg.startsWith("-")
-            && !arg.startsWith("--")
-            && (arg.indexOf('R') >= 0 || arg.indexOf('r') >= 0)) return true;
-      }
-    }
+    if (command.equals("find")) return true;
+    if (command.equals("grep")) return GrepReadPaths.inspect(plan.argv).recursive();
+    if (command.equals("ls") || command.equals("du"))
+      return DirectoryReadPaths.inspect(plan.argv).recursive();
     return false;
   }
 

@@ -76,7 +76,7 @@ def sms_provider_descendant(path, rules):
                for root in sms_roots(rules))
 
 
-def grep_read_paths(argv):
+def grep_read_info(argv):
     """与原生 GrepReadPaths 保持同一合同；文件参数不能藏在组合短选项里。"""
     if (not isinstance(argv, list) or not argv or argv[0] != 'grep'
             or any(not isinstance(arg, str) or '\0' in arg for arg in argv)):
@@ -121,13 +121,63 @@ def grep_read_paths(argv):
     first_file = 0 if explicit_pattern else 1
     paths.extend(value for value in positional[first_file:] if value != '-')
     if recursive and len(positional) <= first_file: paths.append('.')
+    return paths, recursive
+
+
+def grep_read_paths(argv):
+    paths, recursive = grep_read_info(argv)
+    if recursive: raise Blocked('RECURSIVE_GREP_UNVERIFIED')
     return paths
+
+
+def directory_read_info(argv):
+    if (not isinstance(argv, list) or not argv or argv[0] not in ('ls', 'du')
+            or any(not isinstance(arg, str) or '\0' in arg for arg in argv)):
+        raise Blocked('DIRECTORY_READ_ARGUMENTS_UNVERIFIED')
+    ls = argv[0] == 'ls'
+    flags = 'ZgoACFHLNRSUXabcdfhikl@mnpqrstux1!~' if ls else 'hmlcaHkKLsxb'
+    paths, options, recursive, i = [], True, not ls, 1
+    while i < len(argv):
+        arg = argv[i]
+        if options and arg == '--': options = False
+        elif options and arg.startswith('--'):
+            name, equals, value = arg[2:].partition('=')
+            long_flags = {'full-time', 'show-control-chars', 'group-directories-first', 'help', 'version'} if ls else {'help', 'version'}
+            if ls and name == 'color' or not equals and name in long_flags:
+                i += 1
+                continue
+            if not ls or name not in ('sort', 'block-size'):
+                raise Blocked('DIRECTORY_READ_ARGUMENTS_UNVERIFIED')
+            if not equals:
+                i += 1
+                if i >= len(argv): raise Blocked('DIRECTORY_READ_ARGUMENTS_UNVERIFIED')
+                value = argv[i]
+            if name == 'block-size' and not re.fullmatch('[0-9]+', value):
+                raise Blocked('DIRECTORY_READ_ARGUMENTS_UNVERIFIED')
+        elif options and arg.startswith('-') and arg != '-':
+            for j, flag in enumerate(arg[1:], 1):
+                if flag == 'L': raise Blocked('DIRECTORY_SYMLINK_FOLLOW_UNVERIFIED')
+                if ls and flag == 'R': recursive = True
+                if flag in flags: continue
+                if flag != ('w' if ls else 'd'): raise Blocked('DIRECTORY_READ_ARGUMENTS_UNVERIFIED')
+                if j + 1 < len(arg): value = arg[j + 1:]
+                else:
+                    i += 1
+                    if i >= len(argv): raise Blocked('DIRECTORY_READ_ARGUMENTS_UNVERIFIED')
+                    value = argv[i]
+                if not re.fullmatch('[0-9]+', value): raise Blocked('DIRECTORY_READ_ARGUMENTS_UNVERIFIED')
+                break
+        else: paths.append(arg)
+        i += 1
+    return paths or ['.'], recursive
 
 
 def root_read_paths(plan):
     argv, kind = plan.get('argv', []), plan.get('kind')
     if kind == 'READ' and argv and argv[0] == 'grep':
         return grep_read_paths(argv)
+    if kind == 'READ' and argv and argv[0] in ('ls', 'du'):
+        return directory_read_info(argv)[0]
     if kind == 'FILE' and argv and argv[0] == 'cp':
         return list(plan.get('operands', []))[:-1]
     if kind != 'READ' or not argv or argv[0] not in {
@@ -148,10 +198,6 @@ def root_read_paths(plan):
                 continue
         if arg.startswith('/') or '/' in arg or not arg.startswith('-'):
             result.append(arg)
-    if not result and argv[0] == 'du':
-        result.append('.')
-    if not result and argv[0] == 'ls' and root_read_may_descend(plan):
-        result.append('.')
     return result
 
 
@@ -169,14 +215,9 @@ def root_read_may_descend(plan):
         return False
     if kind != 'READ':
         return False
-    if command in ('find', 'du'):
-        return True
-    if command in ('ls', 'grep'):
-        for arg in argv[1:]:
-            if arg in ('-R', '-r', '--recursive'):
-                return True
-            if arg.startswith('-') and not arg.startswith('--') and ('r' in arg or 'R' in arg):
-                return True
+    if command == 'find': return True
+    if command == 'grep': return grep_read_info(argv)[1]
+    if command in ('ls', 'du'): return directory_read_info(argv)[1]
     return False
 
 

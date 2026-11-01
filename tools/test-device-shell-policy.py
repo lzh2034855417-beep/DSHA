@@ -272,8 +272,8 @@ class PolicyTest(unittest.TestCase):
         for argv in (['grep', '-R', '-e', 'x'], ['grep', '-Rf/data/local/tmp/patterns']):
             self.sent.clear()
             with self.assertRaises(policy.Blocked): self.execute(self.plan('READ', argv, []))
-            self.assertIn('/system/bin/readlink -f -- .', self.sent)
-            self.assertFalse(any(sent.startswith('/system/bin/grep ') for sent in self.sent))
+            self.assertEqual([], self.sent)
+            self.assertIn('.', policy.grep_read_info(argv)[0])
 
     def test_grep_pattern_file_dash_is_canonical_checked_but_data_dash_is_stdin(self):
         self.realpaths['-'] = '/data/user/0/com.android.providers.telephony/databases/fixture.db'
@@ -331,6 +331,39 @@ class PolicyTest(unittest.TestCase):
         self.sent.clear();plan=self.plan('STOP',['am','force-stop','example.app'],['example.app']);plan.pop('selfPackage')
         with self.assertRaises(policy.Blocked):self.execute(plan)
         self.assertEqual([],self.sent)
+
+
+    def test_link_following_read_forms_never_reach_metadata_or_execution(self):
+        for argv in (['grep', '-r', 'x', '/data/local/tmp/tree'],
+                     ['grep', '-nR', 'x', '/data/local/tmp/tree'],
+                     ['ls', '-RL', '/data/local/tmp/tree'], ['du', '-aL', '/data/local/tmp/tree'],
+                     ['du', '--dereference', '/data/local/tmp/tree']):
+            with self.subTest(argv=argv):
+                self.sent.clear()
+                with self.assertRaises(policy.Blocked): self.execute(self.plan('READ', argv, []))
+                self.assertEqual([], self.sent)
+
+    def test_metadata_enumeration_and_literal_flag_text_are_preserved(self):
+        for argv in (['grep', '-e', '-R', '/data/local/tmp/input'], ['ls', '-R', '/data/local/tmp/tree'],
+                     ['ls', '-r', '/data/local/tmp/tree'], ['ls', '--', '-L'],
+                     ['du', '-s', '/data/local/tmp/tree'], ['du', '-d', '0', '/data/local/tmp/tree'],
+                     ['find', '/data/local/tmp/tree', '-maxdepth', '2', '-type', 'f']):
+            self.sent.clear()
+            self.execute(self.plan('READ', argv, []))
+            self.assertEqual(['/system/bin/' + argv[0], *argv[1:]], shlex.split(self.sent[-1]))
+        self.assertFalse(policy.root_read_may_descend(self.plan('READ', ['ls', '-r', '/tree'], [])))
+        self.assertFalse(policy.root_read_may_descend(self.plan('READ', ['grep', '-e', '-R', '/file'], [])))
+
+    def test_directory_numeric_values_and_default_cwd_are_checked_precisely(self):
+        for argv in (['ls', '-w', '80', '--sort=size', '/data/local/tmp/tree'],
+                     ['du', '-d', '0', '/data/local/tmp/tree']):
+            self.sent.clear()
+            self.execute(self.plan('READ', argv, []))
+            self.assertEqual(2, len(self.sent))
+        self.sent.clear()
+        self.realpaths['.'] = '/data/user/0/com.android.providers.telephony'
+        with self.assertRaises(policy.Blocked): self.execute(self.plan('READ', ['ls'], []))
+        self.assertEqual(['/system/bin/readlink -f -- .'], self.sent)
 
 
 if __name__ == '__main__': unittest.main(verbosity=2)
