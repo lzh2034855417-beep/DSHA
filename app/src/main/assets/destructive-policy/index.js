@@ -17,7 +17,10 @@ const fail = message => { throw new Error('DSHA_DESTRUCTIVE_BLOCKED: ' + message
 async function globalConsent(signal) {
   let timeout;
   let stage = 'SDK_UNAVAILABLE';
-  const unavailable = (reason, cause, httpStatus) => ({ kind: 'unavailable', reason, cause, httpStatus });
+  let replyStage;
+  // Only fixed labels cross the guard boundary; never include reply values.
+  const unavailable = (reason, cause, httpStatus) => ({ kind: 'unavailable', reason, cause, httpStatus,
+    replyStage: reason === 'INVALID_REPLY' ? replyStage : undefined });
   try {
     const sdk = require('/run/dsha-launcher/native-consent.cjs');
     stage = 'DESCRIPTOR_UNAVAILABLE';
@@ -30,18 +33,30 @@ async function globalConsent(signal) {
     });
     if (!response.ok) return unavailable('HTTP_ERROR', undefined, response.status);
     stage = 'INVALID_REPLY';
+    replyStage = 'ENVELOPE_JSON';
     const envelope = await response.json();
-    if (typeof envelope.result !== 'string' || Buffer.byteLength(envelope.result) > 4096) return unavailable('INVALID_REPLY');
+    replyStage = 'ENVELOPE_SHAPE';
+    if (!envelope || typeof envelope.result !== 'string') return unavailable('INVALID_REPLY');
+    replyStage = 'ENVELOPE_SIZE';
+    if (Buffer.byteLength(envelope.result) > 4096) return unavailable('INVALID_REPLY');
+    replyStage = 'PAYLOAD_JSON';
     const value = JSON.parse(envelope.result);
     const uuid = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/;
     if (value?.schema === 1 && value.available === false) return unavailable('NOT_AVAILABLE');
+    replyStage = 'POLICY_FIELDS';
     if (!value || value.schema !== 1 || value.available !== true || typeof value.globalAllow !== 'boolean'
-        || !Number.isSafeInteger(value.revision) || value.revision < 0
-        || !uuid.test(value.installationId) || !uuid.test(value.bridgeRunId)
-        || !Number.isSafeInteger(value.webGeneration) || value.webGeneration < 1
-        || typeof value.runtimeInstanceId !== 'string' || value.runtimeInstanceId.length > 128
-        || !uuid.test(value.runtimeInstanceId.split(':')[0])
-        || value.runtimeInstanceId !== value.runtimeInstanceId.split(':')[0] + ':' + value.webGeneration) return unavailable('INVALID_REPLY');
+        || !Number.isSafeInteger(value.revision) || value.revision < 0) return unavailable('INVALID_REPLY');
+    replyStage = 'INSTALLATION_ID';
+    if (!uuid.test(value.installationId)) return unavailable('INVALID_REPLY');
+    replyStage = 'BRIDGE_RUN_ID';
+    if (!uuid.test(value.bridgeRunId)) return unavailable('INVALID_REPLY');
+    replyStage = 'WEB_GENERATION';
+    if (!Number.isSafeInteger(value.webGeneration) || value.webGeneration < 1) return unavailable('INVALID_REPLY');
+    replyStage = 'RUNTIME_ID';
+    if (typeof value.runtimeInstanceId !== 'string' || value.runtimeInstanceId.length > 128
+        || !uuid.test(value.runtimeInstanceId.split(':')[0])) return unavailable('INVALID_REPLY');
+    replyStage = 'RUNTIME_GENERATION';
+    if (value.runtimeInstanceId !== value.runtimeInstanceId.split(':')[0] + ':' + value.webGeneration) return unavailable('INVALID_REPLY');
     stage = 'DESCRIPTOR_UNAVAILABLE';
     const current = sdk.readConnection();
     if (['applicationId','generation'].some(key => current[key] !== connection[key])) return unavailable('DESCRIPTOR_CHANGED');
@@ -57,15 +72,17 @@ async function globalConsent(signal) {
     return unavailable(reason, cause);
   }
 }
-function consentFailure(code, detail, cause) {
+function consentFailure(code, detail, cause, nativeConsentStage) {
   const error = new Error('DSHA_DESTRUCTIVE_BLOCKED: ' + code + ': ' + detail, cause === undefined ? undefined : { cause });
   error.code = code;
+  if (nativeConsentStage !== undefined) error.nativeConsentStage = nativeConsentStage;
   throw error;
 }
 function availableConsent(reading) {
   if (reading.kind === 'unavailable') {
     const status = Number.isInteger(reading.httpStatus) ? ' HTTP ' + reading.httpStatus : '';
-    consentFailure('DSHA_NATIVE_CONSENT_UNAVAILABLE', reading.reason + status + '; current native consent could not be verified.', reading.cause);
+    const diagnostic = reading.replyStage ? ' stage=' + reading.replyStage : '';
+    consentFailure('DSHA_NATIVE_CONSENT_UNAVAILABLE', reading.reason + status + diagnostic + '; current native consent could not be verified.', reading.cause, reading.replyStage);
   }
   return reading.facts;
 }

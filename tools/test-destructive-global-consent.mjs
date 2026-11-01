@@ -31,6 +31,7 @@ Module._load = function(request, ...args) {
 const policy = await import('../app/src/main/assets/destructive-policy/index.js');
 const results = [];
 const availabilityDelta = process.argv.includes('--mandatory-availability-only');
+const policyOnly = process.argv.includes('--policy-only');
 const nativeFixtureAt = process.argv.indexOf('--native-wire-fixture');
 const nativeWireOnly = nativeFixtureAt !== -1;
 assert(!(availabilityDelta && nativeWireOnly), 'select one related group');
@@ -236,6 +237,38 @@ try {
     });
     assert.equal(f.effects, 0); assert.equal(f.approvals, 0);
   }), true);
+  const invalidReplies = [
+    ['ENVELOPE_JSON', () => { throw new SyntaxError('PRIVATE_REPLY_TOKEN'); }],
+    ['ENVELOPE_SHAPE', () => null],
+    ['ENVELOPE_SHAPE', () => ({ result: { private: 'PRIVATE_REPLY_TOKEN' } })],
+    ['ENVELOPE_SIZE', () => ({ result: 'PRIVATE_REPLY_TOKEN'.repeat(300) })],
+    ['PAYLOAD_JSON', () => ({ result: 'PRIVATE_REPLY_TOKEN' })],
+    ['POLICY_FIELDS', f => ({ result: JSON.stringify({ ...f.consent, revision: -1 }) })],
+    ['POLICY_FIELDS', () => ({ result: 'null' })],
+    ['INSTALLATION_ID', f => ({ result: JSON.stringify({ ...f.consent, installationId: 'PRIVATE_REPLY_TOKEN' }) })],
+    ['BRIDGE_RUN_ID', f => ({ result: JSON.stringify({ ...f.consent, bridgeRunId: 'PRIVATE_REPLY_TOKEN' }) })],
+    ['WEB_GENERATION', f => ({ result: JSON.stringify({ ...f.consent, webGeneration: 0 }) })],
+    ['RUNTIME_ID', f => ({ result: JSON.stringify({ ...f.consent, runtimeInstanceId: 'PRIVATE_REPLY_TOKEN' }) })],
+    ['RUNTIME_GENERATION', f => ({ result: JSON.stringify({ ...f.consent, runtimeInstanceId: f.consent.runtimeInstanceId.split(':')[0] + ':8' }) })],
+  ];
+  for (const phase of ['initial', 'fresh']) for (const [stage, reply] of invalidReplies) {
+    await test('mandatory invalid reply ' + phase + ' ' + stage + ' is safely classified', () => using({}, async f => {
+      if (phase === 'fresh') await f.prepare();
+      const previousReads = f.reads;
+      f.fetch = async () => ({ ok: true, json: async () => reply(f) });
+      await assert.rejects(phase === 'fresh' ? f.dispatch : f.prepare, error => {
+        assert.equal(error.code, 'DSHA_NATIVE_CONSENT_UNAVAILABLE');
+        assert(error.message.includes('INVALID_REPLY'));
+        assert.equal(error.nativeConsentStage, stage);
+        assert(error.message.includes('stage=' + stage));
+        assert(!error.message.includes('PRIVATE_REPLY_TOKEN'));
+        if (stage === 'ENVELOPE_JSON') assert.equal(error.cause?.message, 'PRIVATE_REPLY_TOKEN');
+        return true;
+      });
+      assert.equal(f.effects, 0); assert.equal(f.approvals, 0);
+      assert.equal(f.reads, previousReads + 1, 'invalid replies are never retried');
+    }), true);
+  }
   for (const phase of ['before-query', 'during-query']) await test('mandatory cancellation ' + phase + ' retains its original cause and never asks', () => using({}, async f => {
     const cause = Error('controlled execution cancellation');
     if (phase === 'before-query') f.abort(cause);
@@ -286,7 +319,7 @@ try {
     assert.equal(f.effects, 0); assert.equal(f.approvals, 0);
   }), true);
   const raw = process.argv[2]; assert(raw, 'explicit locked official raw runtime is required');
-  for (const [asset, module] of [['guard-tools-patch.json', '@deepseek-ai/dsh-tools/lib/index.js'], ['guard-bash-patch.json', '@deepseek-ai/dsh-tool-bash/lib/index.js']]) {
+  for (const [asset, module] of policyOnly ? [] : [['guard-tools-patch.json', '@deepseek-ai/dsh-tools/lib/index.js'], ['guard-bash-patch.json', '@deepseek-ai/dsh-tool-bash/lib/index.js']]) {
     await test(asset + ' exact raw application and ESM parse without evaluation', async () => {
       const recipe = JSON.parse(fs.readFileSync(new URL('../app/src/main/assets/' + asset, import.meta.url), 'utf8'));
       let source = fs.readFileSync(path.join(raw, 'node_modules', module), 'utf8');
@@ -298,5 +331,5 @@ try {
     });
   }
 } finally { Module._load = load; }
-console.log(JSON.stringify({ scope: 'SOURCE_UNIT_REAL_POLICY_CONTROLLED_SIGNED_SDK_PATH_AND_MEMORY_EFFECT', selection: nativeWireOnly ? 'ACTUAL_NATIVE_MAPPER_WIRE_DELTA' : availabilityDelta ? 'MANDATORY_AVAILABILITY_DELTA' : 'ALL', nativeFixture, sdkLoaded: nativeWireOnly, deviceCredentialRead: false, networkRequested: false, commandBodyExecuted: false, nativeEndpointTested: false, cases: results.length, passed: results.filter(row => row.status === 'PASS').length, results }, null, 2));
+console.log(JSON.stringify({ scope: 'SOURCE_UNIT_REAL_POLICY_CONTROLLED_SIGNED_SDK_PATH_AND_MEMORY_EFFECT', selection: nativeWireOnly ? 'ACTUAL_NATIVE_MAPPER_WIRE_DELTA' : availabilityDelta ? 'MANDATORY_AVAILABILITY_DELTA' : policyOnly ? 'MEMORY_POLICY_ONLY_NO_RAW_RECIPE_CHECK' : 'ALL', nativeFixture, sdkLoaded: nativeWireOnly, deviceCredentialRead: false, networkRequested: false, commandBodyExecuted: false, nativeEndpointTested: false, cases: results.length, passed: results.filter(row => row.status === 'PASS').length, results }, null, 2));
 if (results.some(row => row.status !== 'PASS')) process.exitCode = 1;
