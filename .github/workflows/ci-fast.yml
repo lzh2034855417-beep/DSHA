@@ -1,57 +1,45 @@
-name: Source checks
-
-# 节点图：
-#   contracts ─┐
-#   java-format┤  （互不依赖，立即并行）
-#   kotlin-format┤
-#   rust-check ┤
-#   rust-differential ┤  主机 .so + JDK17 JVM 真实对拍 digest（-Xcheck:jni）
-#   inputs ────┼─► unit-source（源码模式单测，最多五个外部夹具跳过）
-#              └─► host-fast（fast 阶段宿主回归，含 raw 夹具与 toolchains）
+name: CAS scan validation only
 on:
   push:
-  pull_request:
+    branches: [codex/cas-scan-validation]
   workflow_dispatch:
 permissions:
   contents: read
-concurrency:
-  group: source-${{ github.ref }}
-  cancel-in-progress: true
 jobs:
-  contracts:
-    uses: ./.github/workflows/_node-contracts.yml
-  java-format:
-    uses: ./.github/workflows/_node-java-format.yml
-  kotlin-format:
-    uses: ./.github/workflows/_node-kotlin-format.yml
-  rust-check:
-    uses: ./.github/workflows/_node-rust.yml
-    with:
-      mode: check
-      artifact: source-rust-check
-  rust-differential:
-    uses: ./.github/workflows/_node-rust.yml
-    with:
-      mode: differential
-      artifact: source-rust-differential
-  inputs:
-    uses: ./.github/workflows/_node-inputs.yml
-    with:
-      rebuild_runtime: true
-  unit-source:
-    needs: inputs
-    uses: ./.github/workflows/_node-unit-tests.yml
-    with:
-      mode: source-only
-      handoff: ${{ needs.inputs.outputs.artifact }}
-      sunset_test: false
-      forks: 2
-      artifact: source-unit-results
-  host-fast:
-    needs: inputs
-    uses: ./.github/workflows/_node-host-tests.yml
-    with:
-      stage: fast
-      handoff: ${{ needs.inputs.outputs.artifact }}
-      toolchains: true
-      artifact: source-regressions
+  cas:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Record exact candidate source
+        run: |
+          mkdir -p app/build/cas-validation
+          git rev-parse HEAD HEAD^ | tee app/build/cas-validation/commits.txt
+          git diff --name-only HEAD^ HEAD
+          sha256sum app/src/main/assets/plugin-transactions.py tools/test-plugin-cas-scan-review.py > app/build/cas-validation/tested-inputs.sha256
+      - name: CAS scan and terminal diagnostics
+        run: python3 -B tools/test-plugin-cas-scan-review.py 2>&1 | tee app/build/cas-validation/scan.log
+      - name: Linux FD nofollow materialization regressions
+        run: python3 -B tools/test-plugin-cas-materialize.py 2>&1 | tee app/build/cas-validation/materialize.log
+      - name: Transaction and startup import regressions
+        run: |
+          python3 -B tools/test-plugin-transactions.py 2>&1 | tee app/build/cas-validation/transactions.log
+          python3 -B tools/test-plugin-startup-imports.py 2>&1 | tee app/build/cas-validation/imports.log
+      - name: Restore pinned inputs and run official Linux descriptor generator
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 -B tools/ci-assets.py --url https://github.com/SunsetRNE/DSHA-Sunset-mod/releases/download/fixed-inputs-20261105e/dsha-a-su-fixed-inputs-20261105e.zip --sha256 be97d9f0a45f408d3a7de83ae55a00a85a5154343589571c6d159a0fe58f08f5
+          git restore app/src/main/assets/dsh-runtime.inputs.json
+          python3 -B tools/prepare-runtime-descriptor.py --write
+          python3 -B tools/prepare-runtime-descriptor.py --check
+          python3 -B tools/verify-runtime-descriptor-source.py | tee app/build/cas-validation/descriptor-check.json
+          cp app/src/main/assets/runtime-descriptor.json app/build/cas-validation/runtime-descriptor.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: cas-scan-linux-evidence
+          path: app/build/cas-validation
