@@ -82,6 +82,53 @@ jobs:
           key: robolectric-android-all-${{ hashFiles('tools/robolectric-sdk.lock.json') }}
       - name: Prepare pinned Robolectric android-all jars
         run: python3 tools/prepare-robolectric-sdks.py --dir "$RUNNER_TEMP/robolectric-deps"
+      - name: Verify new regressions reject the old running-only task identity
+        env:
+          DSHA_ROBOLECTRIC_DEPENDENCY_DIR: ${{ runner.temp }}/robolectric-deps
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          source=app/src/main/java/com/deepseekharness/app/ui/BrowserTasks.java
+          cp "$source" "$RUNNER_TEMP/pr235-production.java"
+          trap 'cp "$RUNNER_TEMP/pr235-production.java" "$source"' EXIT
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/deepseekharness/app/ui/BrowserTasks.java')
+          text = p.read_text()
+          old = 'return Build.VERSION.SDK_INT >= 29 ? info.taskId : info.persistentId;'
+          assert text.count(old) == 1
+          p.write_text(text.replace(old, 'return info.id;'))
+          PY
+          chmod +x gradlew
+          set +e
+          ./gradlew :app:testStandardDebugUnitTest --no-daemon --max-workers=2 -Pdsha.sourceOnlyTests=true -Pdsha.sunsetTest=true -x :app:prepareStandardAssets -x :app:prepareRecoveryAssets --rerun-tasks --tests '*BrowserTasksTest.explicitDispatchFindsRetainedTaskWhoseRunningIdIsAbsent*' --tests '*BrowserTasksTest.retainedNativeTasksKeepThePreferredRecentCardWithoutRemovingTasks*' --tests '*BrowserTasksTest.stableTaskIdentityRecognizesLiveMainInsideAWebRootedTask*' > out/pr235-negative.log 2>&1
+          status=$?
+          set -e
+          cp "$RUNNER_TEMP/pr235-production.java" "$source"
+          if [ "$status" -eq 0 ]; then echo 'Old task-ID behavior unexpectedly passed'; exit 1; fi
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import shutil
+          import xml.etree.ElementTree as ET
+          root = Path('app/build/test-results/testStandardDebugUnitTest')
+          cases = [case for path in root.glob('TEST-*.xml') for case in ET.parse(path).getroot().iter('testcase')]
+          expected = ['explicitDispatchFindsRetainedTaskWhoseRunningIdIsAbsent', 'retainedNativeTasksKeepThePreferredRecentCardWithoutRemovingTasks', 'stableTaskIdentityRecognizesLiveMainInsideAWebRootedTask']
+          assert len(cases) == 6, [(c.attrib, len(c)) for c in cases]
+          for method in expected:
+              matches = [c for c in cases if c.get('name', '').startswith(method)]
+              assert len(matches) == 2, [c.attrib for c in cases]
+              assert all(c.find('failure') is not None and c.find('error') is None and c.find('skipped') is None for c in matches), [c.attrib for c in matches]
+          receipt = {'control': 'helper returns deprecated info.id', 'tests': len(cases), 'expectedAssertionFailures': len(cases), 'errors': 0, 'skipped': 0, 'methods': expected}
+          Path('out/pr235-negative.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          for path in root.glob('TEST-*.xml'):
+              shutil.copyfile(path, Path('out') / ('pr235-negative-' + path.name))
+          print(json.dumps(receipt))
+          PY
+          git diff --exit-code -- "$source"
+          git rev-parse HEAD HEAD^ > out/pr235-source.txt
+          sha256sum "$source" app/src/test/java/com/deepseekharness/app/ui/BrowserTasksTest.java > out/pr235-inputs.sha256
+
       - name: Run Standard unit tests
         env:
           DSHA_ROBOLECTRIC_DEPENDENCY_DIR: ${{ runner.temp }}/robolectric-deps
@@ -133,5 +180,6 @@ jobs:
           path: |
             app/build/test-results/testStandardDebugUnitTest
             out/unit-tests.json
+            out/pr235-*
           if-no-files-found: error
           retention-days: 14
