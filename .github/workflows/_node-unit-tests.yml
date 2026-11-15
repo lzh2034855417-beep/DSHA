@@ -126,7 +126,7 @@ jobs:
           print(json.dumps(receipt))
           PY
           git diff --exit-code -- "$source"
-          git rev-parse HEAD HEAD^ > out/pr235-source.txt
+          git rev-parse HEAD > out/pr235-source.txt
           sha256sum "$source" app/src/test/java/com/deepseekharness/app/ui/BrowserTasksTest.java > out/pr235-inputs.sha256
 
       - name: Run Standard unit tests
