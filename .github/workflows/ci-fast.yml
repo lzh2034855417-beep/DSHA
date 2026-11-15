@@ -18,7 +18,7 @@ jobs:
         run: |
           mkdir -p out
           git rev-parse HEAD > out/pr235-format-source.txt
-          python3 tools/format-java.py --write --files app/src/test/java/com/deepseekharness/app/ui/BrowserTasksTest.java --report out/pr235-format-write.json
+          python3 tools/format-java.py --write --files app/src/test/java/com/deepseekharness/app/ui/BrowserTasksTest.java --report app/build/java-format/pr235-format-write.json
           git diff --stat
           git diff --check
       - name: Recheck the complete official formatting gate
@@ -31,3 +31,4 @@ jobs:
             app/src/test/java/com/deepseekharness/app/ui/BrowserTasksTest.java
             out/pr235-format-*
             app/build/java-format/tree-summary.json
+            app/build/java-format/pr235-format-write.json
