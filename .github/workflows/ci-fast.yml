@@ -17,7 +17,7 @@ jobs:
       - name: Format only the added-regression test with the fixed tool
         run: |
           mkdir -p out
-          git rev-parse HEAD HEAD^ > out/pr235-format-source.txt
+          git rev-parse HEAD > out/pr235-format-source.txt
           python3 tools/format-java.py --write --files app/src/test/java/com/deepseekharness/app/ui/BrowserTasksTest.java --report out/pr235-format-write.json
           git diff --stat
           git diff --check
