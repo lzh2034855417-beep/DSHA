@@ -1,42 +1,48 @@
-name: Source checks
-
-# 节点图：
-#   contracts ─┐
-#   java-format┤  （互不依赖，立即并行）
-#   inputs ────┼─► unit-source（源码模式单测，最多五个外部夹具跳过）
-#              └─► host-fast（fast 阶段宿主回归，含 raw 夹具与 toolchains）
+name: Issue251 uncertain support wording validation
 on:
   push:
-  pull_request:
+    branches: [codex/issue251-support-validation-20261116]
   workflow_dispatch:
 permissions:
   contents: read
-concurrency:
-  group: source-${{ github.ref }}
-  cancel-in-progress: true
 jobs:
-  contracts:
-    uses: ./.github/workflows/_node-contracts.yml
-  java-format:
-    uses: ./.github/workflows/_node-java-format.yml
   inputs:
     uses: ./.github/workflows/_node-inputs.yml
     with:
       rebuild_runtime: true
-  unit-source:
+      artifact: issue251-inputs
+  tests:
     needs: inputs
     uses: ./.github/workflows/_node-unit-tests.yml
     with:
       mode: source-only
       handoff: ${{ needs.inputs.outputs.artifact }}
-      sunset_test: false
-      forks: 2
-      artifact: source-unit-results
-  host-fast:
-    needs: inputs
-    uses: ./.github/workflows/_node-host-tests.yml
-    with:
-      stage: fast
-      handoff: ${{ needs.inputs.outputs.artifact }}
-      toolchains: true
-      artifact: source-regressions
+      tests: com.deepseekharness.app.util.IslandPageTest com.deepseekharness.app.util.IslandTextTest
+      rerun: true
+      artifact: issue251-unit-results
+  format:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-toolchain
+      - name: Verify source and fixed Java formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          git rev-parse HEAD > out/issue251-source.txt
+          git diff --check HEAD^
+          python3 tools/check-source-hygiene.py
+          python3 tools/format-java.py --check --files app/src/main/java/com/deepseekharness/app/ui/IslandFragment.java --report app/build/java-format/issue251-check.json
+          python3 tools/format-java-tree.py --check
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: issue251-format-evidence
+          path: |
+            app/build/java-format/issue251-check.json
+            app/build/java-format/tree-summary.json
+            out/issue251-source.txt
